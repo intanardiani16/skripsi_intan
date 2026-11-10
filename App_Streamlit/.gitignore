@@ -1,0 +1,13 @@
+__pycache__/
+*.pyc
+.env
+venv/
+.venv/
+.streamlit/secrets.toml
+Dataset/
+*.xlsx
+*.csv
+*.pdf
+*.jpeg
+*.jpg
+desktop.ini
