@@ -1,11 +1,11 @@
 """Koneksi SQL Server, helper query ber-cache, inisialisasi skema."""
 import re
-import urllib.parse
 
 import pandas as pd
 import pyodbc
 import streamlit as st
 from sqlalchemy import create_engine, text
+from sqlalchemy.engine import URL
 
 from src import config
 
@@ -24,12 +24,21 @@ def _driver() -> str:
 
 @st.cache_resource
 def get_engine():
-    conn = (
-        f"DRIVER={{{_driver()}}};SERVER={config.SERVER};DATABASE={config.DATABASE};"
-        "Trusted_Connection=yes;TrustServerCertificate=yes;"   # Windows Authentication
+    url = URL.create(
+        "mssql+pyodbc",
+        username=config.DB_USER,        # SQL Server Authentication
+        password=config.DB_PASS,        # karakter spesial di-escape otomatis
+        host=config.SERVER,
+        database=config.DATABASE,
+        query={
+            "driver": _driver(),
+            "Encrypt": "yes",
+            "TrustServerCertificate": "yes",
+            "Connection Timeout": "30",
+        },
     )
     return create_engine(
-        "mssql+pyodbc:///?odbc_connect=" + urllib.parse.quote_plus(conn),
+        url,
         fast_executemany=True,
         pool_size=5,          # koneksi dipakai ulang, tidak bikin koneksi baru tiap query
         max_overflow=5,
@@ -49,8 +58,7 @@ def ensure_schema() -> None:
 
 @st.cache_resource(show_spinner=False)
 def ensure_schema_once() -> bool:
-    """Skema cukup dicek SEKALI per proses server, bukan di setiap rerun Streamlit.
-    Di app.py ganti pemanggilan ensure_schema() dengan ensure_schema_once()."""
+    """Skema cukup dicek SEKALI per proses server, bukan di setiap rerun Streamlit."""
     ensure_schema()
     return True
 
@@ -67,13 +75,12 @@ def read_sql(sql: str, params: dict | None = None) -> pd.DataFrame:
 
 @st.cache_data(ttl=15, show_spinner=False)
 def data_version() -> str:
-    """'Sidik jari' murah dari fact table: jumlah baris + ID terbesar.
+    """'Sidik jari' dari fact table: jumlah baris + ID terbesar.
     Berubah setiap kali ETL memuat/menghapus data.
     WITH (NOLOCK) agar pengecekan ini tidak tertahan oleh ETL yang sedang berjalan."""
     sql = f"""
         SELECT CONCAT(
-            (SELECT ISNULL(SUM(row_count), 0) FROM sys.dm_db_partition_stats
-              WHERE object_id = OBJECT_ID('{FACT_TABLE}') AND index_id IN (0, 1)),
+            (SELECT COUNT_BIG(*) FROM {FACT_TABLE} WITH (NOLOCK)),
             '-',
             (SELECT ISNULL(MAX({FACT_ID_COL}), 0) FROM {FACT_TABLE} WITH (NOLOCK)))
     """
@@ -98,4 +105,4 @@ def sync_cache() -> str:
         if holder["v"] is not None:
             st.cache_data.clear()
         holder["v"] = v
-    return v
+    return 
