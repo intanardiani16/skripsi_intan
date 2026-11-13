@@ -2,47 +2,73 @@
 import re
 
 import pandas as pd
-import pyodbc
 import streamlit as st
 from sqlalchemy import create_engine, text
 from sqlalchemy.engine import URL
 
 from src import config
 
-# --- SESUAIKAN dengan sql/schema.sql milikmu ---
+try:
+    import pyodbc
+except ImportError:          # pyodbc tidak terpasang
+    pyodbc = None
+
+# --- SESUAIKAN dengan sql/schema.sql  ---
 FACT_TABLE = "dbo.FACT_TRANSAKSI_EDC"
 FACT_ID_COL = "transaction_key"
 
 
-def _driver() -> str:
+def _odbc_driver() -> str | None:
+    """Nama ODBC driver yang terpasang, atau None (mis. di Streamlit Cloud)."""
+    if pyodbc is None:
+        return None
     installed = pyodbc.drivers()
-    for d in ("ODBC Driver 18 for SQL Server", "ODBC Driver 17 for SQL Server", "SQL Server"):
+    for d in ("ODBC Driver 18 for SQL Server", "ODBC Driver 17 for SQL Server"):
         if d in installed:
             return d
-    raise RuntimeError("ODBC Driver untuk SQL Server belum terpasang.")
+    return None
 
 
 @st.cache_resource
 def get_engine():
+    driver = _odbc_driver()
+    if driver:
+        # Lokal (Windows): pyodbc + ODBC Driver
+        url = URL.create(
+            "mssql+pyodbc",
+            username=config.DB_USER,
+            password=config.DB_PASS,
+            host=config.SERVER,
+            database=config.DATABASE,
+            query={
+                "driver": driver,
+                "Encrypt": "yes",
+                "TrustServerCertificate": "yes",
+                "Connection Timeout": "30",
+            },
+        )
+        return create_engine(
+            url,
+            fast_executemany=True,
+            pool_size=5,
+            max_overflow=5,
+            pool_pre_ping=True,
+            pool_recycle=1800,
+        )
+
+    # Streamlit Cloud (Linux): pymssql, tanpa driver tambahan
     url = URL.create(
-        "mssql+pyodbc",
-        username=config.DB_USER,        # SQL Server Authentication
-        password=config.DB_PASS,        # karakter spesial di-escape otomatis
+        "mssql+pymssql",
+        username=config.DB_USER,
+        password=config.DB_PASS,
         host=config.SERVER,
         database=config.DATABASE,
-        query={
-            "driver": _driver(),
-            "Encrypt": "yes",
-            "TrustServerCertificate": "yes",
-            "Connection Timeout": "30",
-        },
     )
     return create_engine(
         url,
-        fast_executemany=True,
-        pool_size=5,          # koneksi dipakai ulang, tidak bikin koneksi baru tiap query
+        pool_size=5,
         max_overflow=5,
-        pool_pre_ping=True,   # buang koneksi mati otomatis
+        pool_pre_ping=True,
         pool_recycle=1800,
     )
 
@@ -76,8 +102,7 @@ def read_sql(sql: str, params: dict | None = None) -> pd.DataFrame:
 @st.cache_data(ttl=15, show_spinner=False)
 def data_version() -> str:
     """'Sidik jari' dari fact table: jumlah baris + ID terbesar.
-    Berubah setiap kali ETL memuat/menghapus data.
-    WITH (NOLOCK) agar pengecekan ini tidak tertahan oleh ETL yang sedang berjalan."""
+    Berubah setiap kali ETL memuat/menghapus data."""
     sql = f"""
         SELECT CONCAT(
             (SELECT COUNT_BIG(*) FROM {FACT_TABLE} WITH (NOLOCK)),
@@ -105,4 +130,4 @@ def sync_cache() -> str:
         if holder["v"] is not None:
             st.cache_data.clear()
         holder["v"] = v
-    return 
+    return v
