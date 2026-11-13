@@ -2,6 +2,7 @@ streamlit==1.64.0
 pandas
 sqlalchemy
 pyodbc
+pymssql
 plotly
 openpyxl
 fpdf2
